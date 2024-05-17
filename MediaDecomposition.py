@@ -1,22 +1,26 @@
 from copy import deepcopy
 from typing import List
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
 
-from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+from sklearn.linear_model import LogisticRegression
+from sklearn.feature_selection import SelectFromModel
 
 from Definitions import *
 from BayesRegression import BernoulliRegression as BReg
-
+from BayesRegression import CompareModels
 
 
 class ModelSpec:
-    spec = {}
+    spec: dict = None
+    name: str = None
     
-    def __init__(self): 
-        pass
+    def __init__(self, name=None): 
+        self.name = name
+        self.spec = dict()
         
     def __str__(self): 
         return str(self.ToDict())
@@ -46,12 +50,13 @@ class ModelSpec:
         self.spec[REPORT_SPLITS] = ModelSpec.__ReadInput(report_splits)
         return self
     
-    def FromDict(self, spec: dict) -> None:
+    def FromDict(self, spec: dict):
         for section in SPEC_SECTIONS:
             if section in spec.keys():
                 self.spec[section] = ModelSpec.__ReadInput(spec[section])
             else:
-                print("Warning! No {} section in spec".format(section)) 
+                print("Warning! No {} section in spec".format(section))
+        return self
 
     def ValidateSpecVsData(self, data: pd.DataFrame) -> bool:
         for _, section in self.spec.items():
@@ -72,16 +77,26 @@ class ModelSpec:
         # список переменных, даже если одна
         return self.spec[NON_MEDIA]
     
+    def SetRelevanceGroup(self, relevance_group):
+        self.spec[RELEVANCE_GROUPS] = ModelSpec.__ReadInput(relevance_group)
+        return self
+    
     def RelevanceGroup(self) -> str | None:
         # одна переменная, строка
         if self.spec[RELEVANCE_GROUPS] is None:
             return None
         else:
             return self.spec[RELEVANCE_GROUPS][0]
-        
+    
+    def AllRelevanceGroups(self) -> list[str]:
+        # список переменных, даже если одна
+        return self.spec[RELEVANCE_GROUPS]
+
     def ReportSplits(self) -> list[str]:
         # список переменных, даже если одна
         return self.spec[REPORT_SPLITS]
+    
+
         
 
 def PrepareInput(data: pd.DataFrame, inp):
@@ -91,12 +106,16 @@ def PrepareInput(data: pd.DataFrame, inp):
         return data[inp].values
     else:
         raise ValueError("Some shit in input {}".format(inp))
-    
+
+
+
+
+
 
 class MediaDecomposition:
     spec: ModelSpec = None
     data: pd.DataFrame = None
-    models: list
+    models: dict
     X_media: np.array = None
     X_non_media: np.array = None
     X_split: np.array = None
@@ -104,7 +123,7 @@ class MediaDecomposition:
     report_splits: dict = None
 
     def __init__(self) -> None:
-        self.models = list()
+        self.models = dict()
         self.report_splits = dict()
 
     def PrepareModelInputs(self, spec: ModelSpec, data: pd.DataFrame):
@@ -127,7 +146,6 @@ class MediaDecomposition:
                 )
             )
 
-
     def Fit(self, spec: ModelSpec, data: pd.DataFrame, show_traces=False):
         spec.ValidateSpecVsData(data)
 
@@ -139,17 +157,18 @@ class MediaDecomposition:
         self.PrepareModelInputs(spec, data)
     
         for t in spec.Targets():
+            model_name = (t if self.spec.name is None else "{} {}".format(t, self.spec.name))
             y = PrepareInput(data, t)
-            self.models.append(
-                BReg(t).Fit(self.X_media, self.X_non_media, self.X_split, y=y, show_trace=show_traces)
-            )
+            self.models[t] = BReg(model_name).Fit(self.X_media, self.X_non_media, self.X_split, y=y, show_trace=show_traces)
+        
+        return self
     
     def Contributions(self):
         #
 
         # dims: (resps, model_elements, targets)
         contribs_all_targets = np.stack(
-            [m.Contributions(self.X_media, self.X_non_media, self.X_split) for m in self.models], 
+            [self.models[t].Contributions(self.X_media, self.X_non_media, self.X_split) for t in self.spec.Targets()], 
             axis=-1
         )
         data_all_targets = self.data[self.spec.Targets()]
@@ -167,4 +186,70 @@ class MediaDecomposition:
             result[name] = rep
         
         return pd.concat(result)
+    
+    def GetModel(self, target):
+        if target not in self.models.keys():
+            return None
+        return self.models[target]
          
+
+class ModelBuildUtils:
+
+    def __init__(self) -> None:
+        pass
+
+    def ValidateNonMedia(self, spec: ModelSpec, data: pd.DataFrame, max_variables=5): 
+        spec.ValidateSpecVsData(data)
+        
+        # 1. candidates sets
+        X = data[spec.NonMedia()]
+        feature_sets = set()
+        for t in spec.Targets():
+            y = data[t]
+            c = 0.001
+            while c < 0.5:
+                model = SelectFromModel(
+                    LogisticRegression(C=c, penalty="l1", dual=False, solver='liblinear').fit(X, y), 
+                    prefit=True).fit(X, y)
+                new_feature_set = model.get_feature_names_out()
+                if (0 < len(new_feature_set)) and (len(new_feature_set) < max_variables+1):
+                    feature_sets.add(tuple(new_feature_set))
+                c += 0.005
+        print(feature_sets)
+
+        # 2. candidate models and compare
+        Xm = PrepareInput(data, spec.Media())
+        for t in spec.Targets():
+            y = PrepareInput(data, t)
+            models = []
+            for fset in feature_sets:
+                Xnm = PrepareInput(data, list(fset))
+                models.append(
+                    BReg(str(fset)).Fit(media=Xm, non_media=Xnm, split=None, y=y)
+                )
+            CompareModels(*models)
+
+    def CompareSpecs(self, specs: List[ModelSpec], data: pd.DataFrame):
+        assert len(specs) > 1, "Makes sense only for several specs"
+        
+        models = list()
+        all_targets = set()
+        for spec in specs:
+            all_targets.update(spec.Targets())
+            models.append(MediaDecomposition().Fit(spec, data))
+
+        for t in all_targets:
+            models_to_compare = [m.GetModel(t) for m in models if m.GetModel(t) is not None]
+            CompareModels(*models_to_compare)
+
+
+
+    def ValidateRelevanceGroups(self, spec: ModelSpec, data: pd.DataFrame):
+        assert len(spec.AllRelevanceGroups()) > 1, "Makes sense only for several RG"
+
+        rg_to_check = [None] + spec.AllRelevanceGroups()
+        self.CompareSpecs(
+            [ModelSpec(rg).FromDict(spec.ToDict()).SetRelevanceGroup(rg) for rg in rg_to_check], 
+            data
+        )
+

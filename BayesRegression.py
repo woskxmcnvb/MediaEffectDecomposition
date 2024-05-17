@@ -14,7 +14,13 @@ from numpyro.infer import MCMC, NUTS, Predictive
 
 from scipy.special import expit
 
-
+def CompareModels(*args):
+    models_dict = {m.name: m.ToArviZ() for m in args}
+    compare_results = az.compare(models_dict, ic='waic')
+    print(compare_results)
+    az.plot_compare(compare_results)
+    az.plot_forest(list(models_dict.values()), var_names=['beta'])
+    plt.show()
 
 class BernoulliRegression:
     name: str = None
