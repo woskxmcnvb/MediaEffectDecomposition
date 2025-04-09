@@ -72,12 +72,27 @@ class ModelSpec:
             sns.heatmap(data[existing_vars].isna(), ax=ax)
             plt.show()
         
+        check_result = True
         if len(missings_vars) > 0: 
             print("Missing variables: {}".format(missings_vars))
-            return False
-        else:
+            check_result = False
+        
+        check_result &= self.__ValidateTargetsVsData(data)
+
+        return check_result
+        
+    def __ValidateTargetsVsData(self, data: pd.DataFrame) -> bool:
+        if self.spec[TARGETS] is None: 
             return True
-    
+        check_result = True
+        for var in self.spec[TARGETS]: 
+            if set(data[var].unique().astype("int")) != {0, 1}: 
+                check_result = False
+                print("ERROR! {} variable is not 1/0".format(var))
+                print(data[var].value_counts())
+
+        return check_result
+     
     def Targets(self) -> list[str]:
         # список переменных, даже если одна
         return self.spec[TARGETS]
