@@ -1,6 +1,8 @@
 from copy import deepcopy
-from typing import List
-from collections import defaultdict
+from typing import List, Set, Tuple
+
+import matplotlib.pyplot as plt 
+import seaborn as sns
 
 import numpy as np
 import pandas as pd
@@ -9,9 +11,9 @@ from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 from sklearn.linear_model import LogisticRegression
 from sklearn.feature_selection import SelectFromModel
 
-from Definitions import *
-from BayesRegression import BernoulliRegression as BReg
-from BayesRegression import CompareModels
+from .Definitions import *
+from .BayesRegression import BernoulliRegression as BReg
+from .BayesRegression import CompareModels
 
 
 class ModelSpec:
@@ -58,12 +60,23 @@ class ModelSpec:
                 print("Warning! No {} section in spec".format(section))
         return self
 
-    def ValidateSpecVsData(self, data: pd.DataFrame) -> bool:
+    def ValidateSpecVsData(self, data: pd.DataFrame, show_missing=False) -> bool:
+        missings_vars = []
+        existing_vars = []
         for _, section in self.spec.items():
             if section is not None:
-                for v in section:
-                    assert v in data, "Variable {} not found in data".format(v)
-        return True
+                missings_vars += [v for v in section if v not in data]
+                existing_vars += [v for v in section if v in data]
+        if show_missing:
+            _, ax = plt.subplots(1,1, figsize=(15,10))
+            sns.heatmap(data[existing_vars].isna(), ax=ax)
+            plt.show()
+        
+        if len(missings_vars) > 0: 
+            print("Missing variables: {}".format(missings_vars))
+            return False
+        else:
+            return True
     
     def Targets(self) -> list[str]:
         # список переменных, даже если одна
@@ -146,7 +159,7 @@ class MediaDecomposition:
                 )
             )
 
-    def Fit(self, spec: ModelSpec, data: pd.DataFrame, show_traces=False):
+    def Fit(self, spec: ModelSpec, data: pd.DataFrame, show_traces=False, num_samples=2000, num_chains=1):
         spec.ValidateSpecVsData(data)
 
         self.models.clear()
@@ -157,9 +170,12 @@ class MediaDecomposition:
         self.PrepareModelInputs(spec, data)
     
         for t in spec.Targets():
+            print("Fitting model for {}".format(t))
             model_name = (t if self.spec.name is None else "{} {}".format(t, self.spec.name))
             y = PrepareInput(data, t)
-            self.models[t] = BReg(model_name).Fit(self.X_media, self.X_non_media, self.X_split, y=y, show_trace=show_traces)
+            self.models[t] = BReg(model_name).Fit(self.X_media, self.X_non_media, self.X_split, y=y, 
+                                                  show_trace=show_traces, 
+                                                  num_samples=num_samples, num_chains=num_chains)
         
         return self
     
@@ -198,10 +214,26 @@ class ModelBuildUtils:
     def __init__(self) -> None:
         pass
 
+    def CompareNonMedia(self, variables_sets: Set[Tuple], spec: ModelSpec, data: pd.DataFrame):
+        Xm = PrepareInput(data, spec.Media())
+        for t in spec.Targets():
+            print("___ models for {}".format(t))
+            y = PrepareInput(data, t)
+            models = []
+            for fset in variables_sets:
+                Xnm = PrepareInput(data, list(fset))
+                models.append(
+                    BReg(str(fset)).Fit(media=Xm, non_media=Xnm, split=None, y=y)
+                )
+            CompareModels(*models)
+
+    
+    
     def ValidateNonMedia(self, spec: ModelSpec, data: pd.DataFrame, max_variables=5): 
         spec.ValidateSpecVsData(data)
         
         # 1. candidates sets
+        print("Stage 1 of 2. Selecting variables with LogisticRegression and SelectFromModel")
         X = data[spec.NonMedia()]
         feature_sets = set()
         for t in spec.Targets():
@@ -209,17 +241,22 @@ class ModelBuildUtils:
             c = 0.001
             while c < 0.5:
                 model = SelectFromModel(
-                    LogisticRegression(C=c, penalty="l1", dual=False, solver='liblinear').fit(X, y), 
+                    LogisticRegression(C=c, penalty="l1", dual=False, solver='liblinear', max_iter=500).fit(X, y), 
                     prefit=True).fit(X, y)
-                new_feature_set = model.get_feature_names_out()
-                if (0 < len(new_feature_set)) and (len(new_feature_set) < max_variables+1):
-                    feature_sets.add(tuple(new_feature_set))
+                new_feature_set = tuple(model.get_feature_names_out())
+                if (0 < len(new_feature_set)) and (len(new_feature_set) <= max_variables):
+                    if new_feature_set not in feature_sets:
+                        print("New variable set found: {}".format(new_feature_set))
+                    feature_sets.add(new_feature_set)
                 c += 0.005
-        print(feature_sets)
 
         # 2. candidate models and compare
+        print("Found {} variable sets to test".format(len(feature_sets)))
+        print("All sets: {}".format(feature_sets))
+        print("Stage 2 of 2. Comparing models with these setes")
         Xm = PrepareInput(data, spec.Media())
         for t in spec.Targets():
+            print("___ models for {}".format(t))
             y = PrepareInput(data, t)
             models = []
             for fset in feature_sets:

@@ -9,6 +9,7 @@ import arviz as az
 
 import numpyro
 import numpyro.distributions as dist
+numpyro.set_host_device_count(4)
 
 from numpyro.infer import MCMC, NUTS, Predictive
 
@@ -239,14 +240,14 @@ class BernoulliRegression:
         numpyro.sample("obs", dist.BinomialLogits(log_prob), obs=y)"""
 
 
-    def Fit(self, media: np.array, non_media: np.array, split: np.array, y: np.array, show_trace=False):
+    def Fit(self, media: np.array, non_media: np.array, split: np.array, y: np.array, show_trace=False, num_samples=2000, num_chains=1):
         self.fit_with_sample_size = y.shape[0]
         #self.fit_with_data['media'] = PrepareInput(media)
         #self.fit_with_data['non_media'] = PrepareInput(non_media)
         #self.fit_with_data['split'] = (None if split is None else split.copy())
         
         rng_key = random.PRNGKey(self.seed)
-        self.mcmc = MCMC(NUTS(self.Model), num_warmup=1000, num_samples=2000)
+        self.mcmc = MCMC(NUTS(self.Model), num_warmup=1000, num_samples=num_samples, num_chains=num_chains)
         self.mcmc.run(rng_key, 
                       media_freq=media, #self.fit_with_data['media'], 
                       non_media=non_media, #self.fit_with_data['non_media'], 
