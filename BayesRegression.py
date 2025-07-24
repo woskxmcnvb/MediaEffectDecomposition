@@ -1,19 +1,21 @@
-import pandas as pd
-import numpy as np 
 import matplotlib.pyplot as plt
 
-from jax import random
+import jax
 import jax.numpy as jnp
 
 import arviz as az
 
 import numpyro
 import numpyro.distributions as dist
+
 numpyro.set_host_device_count(4)
 
 from numpyro.infer import MCMC, NUTS, Predictive
 
-from scipy.special import expit
+@jax.jit
+def _media_preprocess(X: jax.Array, alpha: jax.Array, gamma: jax.Array, beta=None) -> jax.Array:
+    data_pow_alpha = jnp.power(X, alpha)
+    return data_pow_alpha / (data_pow_alpha + jnp.power(gamma, alpha))
 
 def CompareModels(*args):
     models_dict = {m.name: m.ToArviZ() for m in args}
@@ -48,34 +50,32 @@ class BernoulliRegression:
             return y.shape[0]
         if self.fit_with_sample_size:
             return self.fit_with_sample_size
-        raise RecursionError("No sample size defined")
+        raise ValueError("No sample size defined")
         
-
-    def Model(self, media_freq=None, non_media=None, split_var=None, y=None):
+    def Model(self, media_freq: jax.Array=None, non_media: jax.Array=None, split_var: jax.Array=None, y: jax.Array=None):
         # media saturaion if in model
         if media_freq is not None: 
             alpha = 20 * numpyro.sample("alpha", dist.Beta(1, 2).expand([media_freq.shape[-1]]).to_event(1)) # dims: (media_dims) 
-            gamma = 10 * numpyro.sample("gamma", dist.Beta(1, 2).expand([media_freq.shape[-1]]).to_event(1))
-            media_pow_gamma = jnp.power(media_freq, gamma)
-            media_freq = media_pow_gamma / (media_pow_gamma + jnp.power(alpha, gamma)) # dims: (sample, media_dims) 
+            gamma = 10 * numpyro.sample("gamma", dist.Beta(1, 2).expand([media_freq.shape[-1]]).to_event(1)) # dims: (media_dims) 
+            media_freq = _media_preprocess(media_freq, gamma, alpha) # dims: (sample, media_dims) 
         
-        covs = jnp.column_stack([c for c in [media_freq, non_media] if (c is not None)] + [np.ones((self.__GetSampleSize(), 1))])
+        covs = jnp.column_stack([c for c in [media_freq, non_media] if (c is not None)] + [jnp.ones((self.__GetSampleSize(), 1))])
 
-        if split_var is None:
-            n_groups, split_var = 1, 0
-        else:
-            n_groups = len(np.unique(split_var))
-
-        with numpyro.plate("sample_split", n_groups):
+        with numpyro.plate("sample_split", self.num_sample_splits):
             betas = numpyro.sample("beta", dist.Normal(0, 1).expand([covs.shape[-1]]).to_event(1))
 
         log_prob = numpyro.deterministic("prob", (betas[split_var] * covs).sum(axis=1))
         numpyro.sample("obs", dist.BinomialLogits(log_prob), obs=y)
 
-    def Fit(self, media: np.array, non_media: np.array, split: np.array, y: np.array, show_trace=False, num_samples=2000, num_chains=1):
+    def Fit(self, media: jax.Array, non_media: jax.Array, split: jax.Array, y: jax.Array, show_trace=False, num_samples=2000, num_chains=1):
         self.fit_with_sample_size = y.shape[0]
+        if split is None:    
+            self.num_sample_splits = 1
+            split = jnp.array(0)
+        else:
+            self.num_sample_splits = split.max().item() + 1
         
-        rng_key = random.PRNGKey(self.seed)
+        rng_key = jax.random.PRNGKey(self.seed)
         self.mcmc = MCMC(NUTS(self.Model), num_warmup=1000, num_samples=num_samples, num_chains=num_chains)
         self.mcmc.run(rng_key, 
                       media_freq=media, #self.fit_with_data['media'], 
@@ -105,15 +105,15 @@ class BernoulliRegression:
         assert self.mcmc, "Run .Fit first"
         return self.pred_function
 
-    def Predictions(self, media: np.array, non_media: np.array, split: np.array) -> np.array:
-        return expit(self.pred_function(
-                random.PRNGKey(127),
+    def Predictions(self, media: jax.Array, non_media: jax.Array, split: jax.Array) -> jax.Array:
+        return jax.scipy.special.expit(self.pred_function(
+                jax.random.PRNGKey(127),
                 media_freq=media, 
                 non_media=non_media, 
                 split_var=split
             )['prob']).mean(axis=0)
     
-    def Contributions(self, media: np.array, non_media: np.array, split: np.array) -> np.array: 
+    def Contributions(self, media: jax.Array, non_media: jax.Array, split: jax.Array) -> jax.Array: 
         # возвращает вклады в разрезе base / non_media / media
         # по респондентам
         # dims = (resps,  base / non_media / media)
@@ -125,10 +125,10 @@ class BernoulliRegression:
         # base: нули для non-campaign и для campaign
         # dims: (N respondents)
         contributions.append(
-            expit(self.pred_function(
-                random.PRNGKey(127),
-                media_freq=(None if media is None else np.zeros_like(media)), 
-                non_media=(None if non_media is None else np.zeros_like(non_media)), 
+            jax.scipy.special.expit(self.pred_function(
+                jax.random.PRNGKey(127),
+                media_freq=(None if media is None else jnp.zeros_like(media)), 
+                non_media=(None if non_media is None else jnp.zeros_like(non_media)), 
                 split_var=split
             )['prob']).mean(axis=0)
         )
@@ -136,9 +136,9 @@ class BernoulliRegression:
         # non campaign: вернули значения для non-campaign
         if non_media is not None:
             contributions.append(
-                expit(self.pred_function(
-                    random.PRNGKey(127),
-                    media_freq=(None if media is None else np.zeros_like(media)), 
+                jax.scipy.special.expit(self.pred_function(
+                    jax.random.PRNGKey(127),
+                    media_freq=(None if media is None else jnp.zeros_like(media)), 
                     non_media=non_media, 
                     split_var=split
                 )['prob']).mean(axis=0)
@@ -146,12 +146,13 @@ class BernoulliRegression:
 
         # campaign: возвращаем значения для кампаний по очереди
         if media is not None:
-            Xm = np.zeros_like(media)
+            Xm = jnp.zeros_like(media)
             for i in range(Xm.shape[-1]):
-                Xm[..., i] = media[..., i]
+                #Xm[..., i] = media[..., i]
+                Xm.at[..., i].set(media[..., i])
                 contributions.append(
-                    expit(self.pred_function(
-                        random.PRNGKey(127),
+                    jax.scipy.special.expit(self.pred_function(
+                        jax.random.PRNGKey(127),
                         media_freq=Xm, 
                         non_media=non_media, 
                         split_var=split
@@ -160,4 +161,4 @@ class BernoulliRegression:
         
         # собираем все в одну таблицу. dims: (N respondents, компоненты модели)
         # находим послойную разницу, чтобы найти именно вклады
-        return np.diff(np.column_stack(contributions), axis=1, prepend=0)
+        return jnp.diff(jnp.column_stack(contributions), axis=1, prepend=0)

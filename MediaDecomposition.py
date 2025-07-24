@@ -4,7 +4,8 @@ from typing import List, Set, Tuple
 import matplotlib.pyplot as plt 
 import seaborn as sns
 
-import numpy as np
+import jax
+import jax.numpy as jnp
 import pandas as pd
 
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
@@ -126,27 +127,22 @@ class ModelSpec:
     
 
         
-
-def PrepareInput(data: pd.DataFrame, inp):
+def PrepareInput(data: pd.DataFrame, inp) -> jax.Array:
     if (inp is None) or (inp == []):
         return None
     elif isinstance(inp, str) or isinstance(inp, list):
-        return data[inp].values
+        return jnp.array(data[inp].values)
     else:
         raise ValueError("Some shit in input {}".format(inp))
-
-
-
-
 
 
 class MediaDecomposition:
     spec: ModelSpec = None
     data: pd.DataFrame = None
     models: dict
-    X_media: np.array = None
-    X_non_media: np.array = None
-    X_split: np.array = None
+    X_media: jax.Array = None
+    X_non_media: jax.Array = None
+    X_split: jax.Array = None
 
     report_splits: dict = None
 
@@ -159,9 +155,9 @@ class MediaDecomposition:
         self.X_non_media = PrepareInput(data, spec.NonMedia())
         
         # LabelEncoder нужен потому что данные могут быть 1,2,... а нужно 0,1,...
-        self.X_split = PrepareInput(data, spec.RelevanceGroup())
-        if self.X_split is not None: 
-            self.X_split = LabelEncoder().fit_transform(self.X_split)
+        X_split = PrepareInput(data, spec.RelevanceGroup())
+        if X_split is not None: 
+            self.X_split = LabelEncoder().fit_transform(X_split)
         
         self.report_splits['Total'] = pd.Series([True] * len(data))
         if spec.ReportSplits() is not None:
@@ -195,7 +191,7 @@ class MediaDecomposition:
         return self
 
     def Predictions(self):
-        contribs_all_targets = np.stack(
+        contribs_all_targets = jnp.stack(
             [self.models[t].Predictions(self.X_media, self.X_non_media, self.X_split) for t in self.spec.Targets()], 
             axis=-1
         )
@@ -207,7 +203,7 @@ class MediaDecomposition:
         #
 
         # dims: (resps, model_elements, targets)
-        contribs_all_targets = np.stack(
+        contribs_all_targets = jnp.stack(
             [self.models[t].Contributions(self.X_media, self.X_non_media, self.X_split) for t in self.spec.Targets()], 
             axis=-1
         )
