@@ -276,6 +276,14 @@ class BernoulliRegression:
         assert self.mcmc, "Run .Fit first"
         return self.pred_function
 
+    def Predictions(self, media: np.array, non_media: np.array, split: np.array) -> np.array:
+        return expit(self.pred_function(
+                random.PRNGKey(127),
+                media_freq=media, 
+                non_media=non_media, 
+                split_var=split
+            )['prob']).mean(axis=0)
+    
     def Contributions(self, media: np.array, non_media: np.array, split: np.array) -> np.array: 
         # возвращает вклады в разрезе base / non_media / media
         # по респондентам

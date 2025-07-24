@@ -65,8 +65,8 @@ class ModelSpec:
         existing_vars = []
         for _, section in self.spec.items():
             if section is not None:
-                missings_vars += [v for v in section if v not in data]
-                existing_vars += [v for v in section if v in data]
+                missings_vars += [v for v in section if (v is not None) and (v not in data)]
+                existing_vars += [v for v in section if (v is not None) and (v in data)]
         if show_missing:
             _, ax = plt.subplots(1,1, figsize=(15,10))
             sns.heatmap(data[existing_vars].isna(), ax=ax)
@@ -163,9 +163,9 @@ class MediaDecomposition:
         if self.X_split is not None: 
             self.X_split = LabelEncoder().fit_transform(self.X_split)
         
+        self.report_splits['Total'] = pd.Series([True] * len(data))
         if spec.ReportSplits() is not None:
             ohe = OneHotEncoder(sparse_output=False).fit(data[spec.ReportSplits()])
-            self.report_splits['Total'] = pd.Series([True] * len(data))
             self.report_splits.update(
                 dict(pd.DataFrame(
                         ohe.transform(data[spec.ReportSplits()]).astype(bool), 
@@ -193,7 +193,16 @@ class MediaDecomposition:
                                                   num_samples=num_samples, num_chains=num_chains)
         
         return self
-    
+
+    def Predictions(self):
+        contribs_all_targets = np.stack(
+            [self.models[t].Predictions(self.X_media, self.X_non_media, self.X_split) for t in self.spec.Targets()], 
+            axis=-1
+        )
+        data_all_targets = self.data[self.spec.Targets()]
+
+        return contribs_all_targets, data_all_targets
+
     def Contributions(self):
         #
 
