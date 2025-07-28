@@ -1,5 +1,5 @@
 from copy import deepcopy
-from typing import List, Set, Tuple
+from typing import List, Set, Tuple, Dict
 
 import matplotlib.pyplot as plt 
 import seaborn as sns
@@ -139,7 +139,7 @@ def PrepareInput(data: pd.DataFrame, inp) -> jax.Array:
 class MediaDecomposition:
     spec: ModelSpec = None
     data: pd.DataFrame = None
-    models: dict
+    models: Dict[str, BReg]
     X_media: jax.Array = None
     X_non_media: jax.Array = None
     X_split: jax.Array = None
@@ -200,9 +200,32 @@ class MediaDecomposition:
         return contribs_all_targets, data_all_targets
 
     def Contributions(self):
-        #
+        # возвращает таблицу вкладов, аггрегированную по выборке и сплитам, в разрезе media / base
+        # новая версия, берет вклады из выборки построенной когда Fit
+        contribs_all_targets = jnp.stack(
+            [self.models[t].Contributions() for t in self.spec.Targets()], 
+            axis=-1
+        )
+    
+        data_all_targets = self.data[self.spec.Targets()]
 
-        # dims: (resps, model_elements, targets)
+        result = {}
+        report_index = ['Base', 'Non-media'] + self.spec.Media()
+        report_columns = self.spec.Targets()
+        
+        for name, filt in self.report_splits.items():
+            rep = pd.DataFrame(contribs_all_targets[filt.values].mean(axis=0), index=report_index, columns=report_columns)
+            rep = rep.where(rep >= 0, 0) 
+            obs = data_all_targets[filt].mean()
+            rep = rep / (rep.sum() / obs)
+            rep.loc["Observed", :] = obs
+            result[name] = rep
+        
+        return pd.concat(result)
+
+    def ContributionsOld(self):
+        # возвращает таблицу вкладов, аггрегированную по выборке и сплитам, в разрезе media / base
+        # старая версия, для совместимости, работает через predictive и долго
         contribs_all_targets = jnp.stack(
             [self.models[t].Contributions(self.X_media, self.X_non_media, self.X_split) for t in self.spec.Targets()], 
             axis=-1
@@ -224,11 +247,15 @@ class MediaDecomposition:
         
         return pd.concat(result)
     
-    def GetModel(self, target):
+    def GetModel(self, target: str) -> BReg:
+        # return ref to the model by target name
         if target not in self.models.keys():
             return None
         return self.models[target]
-         
+
+
+
+
 
 class ModelBuildUtils:
 
