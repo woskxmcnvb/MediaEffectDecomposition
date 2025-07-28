@@ -207,6 +207,7 @@ class MediaDecomposition:
             [self.models[t].Contributions(self.X_media, self.X_non_media, self.X_split) for t in self.spec.Targets()], 
             axis=-1
         )
+    
         data_all_targets = self.data[self.spec.Targets()]
 
         result = {}
@@ -214,8 +215,8 @@ class MediaDecomposition:
         report_columns = self.spec.Targets()
         
         for name, filt in self.report_splits.items():
-            rep = pd.DataFrame(contribs_all_targets[filt].mean(axis=0), index=report_index, columns=report_columns)
-            rep[rep < 0] = 0 
+            rep = pd.DataFrame(contribs_all_targets[filt.values].mean(axis=0), index=report_index, columns=report_columns)
+            rep = rep.where(rep >= 0, 0) 
             obs = data_all_targets[filt].mean()
             rep = rep / (rep.sum() / obs)
             rep.loc["Observed", :] = obs
