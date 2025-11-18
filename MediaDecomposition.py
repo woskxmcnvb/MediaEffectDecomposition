@@ -40,7 +40,7 @@ class ModelSpec:
             return None
         elif isinstance(inp, str):
             return [inp]
-        elif isinstance(inp, list):
+        elif isinstance(inp, list) | isinstance(inp, tuple):
             return list(inp)
         else: 
             raise ValueError("Unknown input {}".format(inp))
@@ -199,7 +199,7 @@ class MediaDecomposition:
 
         return contribs_all_targets, data_all_targets
 
-    def Contributions(self):
+    def Contributions(self) -> pd.DataFrame:
         # возвращает таблицу вкладов, аггрегированную по выборке и сплитам, в разрезе media / base
         # новая версия, берет вклады из выборки построенной когда Fit
         contribs_all_targets = jnp.stack(
@@ -223,7 +223,7 @@ class MediaDecomposition:
         
         return pd.concat(result)
 
-    def ContributionsOld(self):
+    def ContributionsOld(self) -> pd.DataFrame:
         # возвращает таблицу вкладов, аггрегированную по выборке и сплитам, в разрезе media / base
         # старая версия, для совместимости, работает через predictive и долго
         contribs_all_targets = jnp.stack(

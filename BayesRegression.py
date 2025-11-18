@@ -9,7 +9,7 @@ import arviz as az
 import numpyro
 import numpyro.distributions as dist
 
-numpyro.set_host_device_count(4)
+#numpyro.set_host_device_count(4)
 
 from numpyro.infer import MCMC, NUTS, Predictive
 
@@ -87,7 +87,8 @@ class BernoulliRegression:
                       non_media=non_media, 
                       split_var=split, 
                       y=y)
-        self.pred_function = Predictive(self.Model, posterior_samples=self.mcmc.get_samples())
+        #self.mcmc.transfer_states_to_host()
+        #self.pred_function = Predictive(self.Model, posterior_samples=self.mcmc.get_samples())
         if show_trace:
             az_data = self.ToArviZ()
             vars_to_plot = [v for v in ['alpha', 'gamma', 'beta'] if v in az_data['posterior']]
@@ -108,7 +109,7 @@ class BernoulliRegression:
         return self.pred_function
     
     def Predictions(self, media: jax.Array, non_media: jax.Array, split: jax.Array) -> jax.Array:
-        return jax.scipy.special.expit(self.pred_function(
+        return expit(self.pred_function(
                 jax.random.PRNGKey(127),
                 media_freq=media, 
                 non_media=non_media, 
@@ -165,7 +166,7 @@ class BernoulliRegression:
         # base: нули для non-campaign и для campaign
         # dims: (N respondents)
         contributions.append(
-            jax.scipy.special.expit(self.pred_function(
+            expit(self.pred_function(
                 jax.random.PRNGKey(127),
                 media_freq=(None if media is None else jnp.zeros_like(media)), 
                 non_media=(None if non_media is None else jnp.zeros_like(non_media)), 
@@ -176,7 +177,7 @@ class BernoulliRegression:
         # non campaign: вернули значения для non-campaign
         if non_media is not None:
             contributions.append(
-                jax.scipy.special.expit(self.pred_function(
+                expit(self.pred_function(
                     jax.random.PRNGKey(127),
                     media_freq=(None if media is None else jnp.zeros_like(media)), 
                     non_media=non_media, 
@@ -191,7 +192,7 @@ class BernoulliRegression:
                 #Xm[..., i] = media[..., i]
                 Xm = Xm.at[..., i].set(media[..., i])
                 contributions.append(
-                    jax.scipy.special.expit(self.pred_function(
+                    expit(self.pred_function(
                         jax.random.PRNGKey(127),
                         media_freq=Xm, 
                         non_media=non_media, 
