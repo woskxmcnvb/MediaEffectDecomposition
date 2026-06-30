@@ -1,1 +1,1 @@
-from .MediaDecomposition import ModelSpec, MediaDecomposition, ModelBuildUtils
+from .MediaDecomposition import ModelSpec, MediaDecomposition, ModelBuildUtils, GetContributions

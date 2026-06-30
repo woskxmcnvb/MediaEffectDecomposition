@@ -1,5 +1,14 @@
+import os
+# Запрещаем захват 90% памяти сразу, память будет расти по мере необходимости
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+
+# Включаем активное освобождение памяти (доступно в свежих версиях JAX)
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+
 from copy import deepcopy
+from itertools import batched
 from typing import List, Set, Tuple, Dict
+import gc
 
 import matplotlib.pyplot as plt 
 import seaborn as sns
@@ -16,6 +25,39 @@ from .Definitions import *
 from .BayesRegression import BernoulliRegression as BReg
 from .BayesRegression import CompareModels
 
+def GetContributions(
+        model_data: pd.DataFrame,
+        targets: List, 
+        media: List, 
+        non_media: Tuple=None, 
+        relevance_groups: str=None, 
+        report_splits: List=None, 
+        targets_batch_size=5, 
+        num_samples=2000, 
+        num_chains=2
+    ):
+
+    batch_results = []
+    
+    for targets_chunk in batched(targets, targets_batch_size):
+        model_spec = ModelSpec().FromLists(
+            targets = list(targets_chunk), 
+            media = media,
+            non_media = non_media, 
+            relevance_groups = relevance_groups,
+            report_splits = report_splits
+        )
+        assert model_spec.ValidateSpecVsData(model_data, show_missing=False),\
+            "Spec validation test not passed"
+        
+        with MediaDecomposition() as xmc:
+            xmc.Fit(
+                model_spec, model_data, 
+                show_traces=False, num_samples=num_samples, num_chains=num_chains
+            )
+            batch_results.append(xmc.Contributions())
+
+    return pd.concat(batch_results, axis=1)
 
 class ModelSpec:
     spec: dict = None
@@ -149,6 +191,43 @@ class MediaDecomposition:
     def __init__(self) -> None:
         self.models = dict()
         self.report_splits = dict()
+
+    # Методы __enter__ __exit__ для работы с объектом через менеджер контекста для очистки памяти
+    def __enter__(self):
+        print("Инициализация объекта MediaDecomposition в контектсте")
+        return self 
+    
+    def __exit__(self, exc_type, exc, tb):
+        """
+        Этот метод вызовется ГАРАНТИРОВАННО, даже если внутри блока `with`  произошла ошибка.
+        """
+        print("Выход из контекста. Начинаем очистку памяти...")
+
+        # 1. Удаляем ссылки на тяжелые объекты NumPyro внутри класса
+        for name, model in self.models.items(): 
+            del model.mcmc
+
+        # 2. Очищаем все остальные ссылки самого класса, если они не нужны
+        self.data = None
+
+        # 3. Принудительный запуск сборщика мусора Python
+        gc.collect()
+
+        # 4. Очистка внутренних кэшей компилятора и массивов JAX/XLA
+        jax.clear_caches()
+
+        # Ожидаем завершения всех асинхронных операций JAX на бэкенде
+        try:
+            jax.effects_barrier()
+        except AttributeError:
+            # Для старых версий JAX, если effects_barrier недоступен
+            pass
+
+        print("Очистка завершена.")
+
+        # Если вернуть True, то исключение (если оно было) подавится.
+        # Возвращаем False, чтобы ошибки (если они возникнут) пробрасывались наверх.
+        return False
 
     def PrepareModelInputs(self, spec: ModelSpec, data: pd.DataFrame):
         self.X_media = PrepareInput(data, spec.Media())

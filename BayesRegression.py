@@ -1,3 +1,11 @@
+import os
+# Запрещаем захват 90% памяти сразу, память будет расти по мере необходимости
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+
+# Включаем активное освобождение памяти (доступно в свежих версиях JAX)
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+
+
 import matplotlib.pyplot as plt
 
 import jax
